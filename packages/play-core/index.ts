@@ -55,6 +55,13 @@ export class Pavement {
     while (x !== target && this.canPlace(x + step, y, rotation)) x += step;
     return x;
   }
+  rotateAt(x: number, y: number, rotation: Rotation): number | undefined {
+    // A small sideways wall kick, never a vertical lift or a jump across tiles.
+    for (const offset of [0, -1, 1]) {
+      if (this.canPlace(x + offset, y, rotation)) return x + offset;
+    }
+    return undefined;
+  }
   drop(x: number, rotation: Rotation): Tile[] {
     const p = this.landing(x, rotation);
     return this.place(p.x, p.y, rotation);

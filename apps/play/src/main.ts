@@ -3,13 +3,13 @@ import './style.css';
 import { Pavement, type Rotation } from '../../../packages/play-core';
 import { PlayScene } from './scene';
 import { PlaySound } from './sound';
-import { isDownSwipe } from './input';
+import { isDownSwipe, swipeAxis, type SwipeAxis } from './input';
 import { downloadFile, Receipt, receiptPhoto } from './export';
 import { mountReceiptPreview } from './receipt-preview';
 
 document.querySelector('#app')!.innerHTML = `<main class="play"><canvas id="playfield" tabindex="0" aria-label="블록 쌓기. 좌우 스와이프로 이동, 탭으로 회전, 아래 스와이프로 배치."></canvas><button id="pause" aria-label="일시정지"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10M15 7v10"/></svg></button></main><dialog id="pause-menu" aria-label="일시정지"><button id="resume">Resume</button><button id="export">Export</button></dialog>`;
 const canvas = document.querySelector<HTMLCanvasElement>('#playfield')!;
-canvas.setAttribute('aria-label', '블록을 누른 채 아래와 좌우로 끌어 이동. 위로 이동 불가. 탭으로 회전, 손을 놓으면 안착.');
+canvas.setAttribute('aria-label', '화면 어디서든 좌우 스와이프로 이동, 아래 스와이프로 내리기. 위로 이동 불가. 탭으로 회전.');
 const menu = document.querySelector<HTMLDialogElement>('#pause-menu')!;
 const pauseButton = document.querySelector<HTMLButtonElement>('#pause')!;
 const pauseActions = document.createElement('div');
@@ -32,7 +32,7 @@ let board = new Pavement(), started = new Date();
 const sound = new PlaySound();
 let view: PlayScene;
 let x = 2, rotation: Rotation = 0;
-let gesture: { id: number; x: number; y: number; lastY: number; column: number; moved: boolean; lowered: boolean } | undefined;
+let gesture: { id: number; x: number; y: number; lastY: number; column: number; moved: boolean; lowered: boolean; axis?: SwipeAxis } | undefined;
 let fillSound: ReturnType<typeof setTimeout> | undefined;
 function createScene() {
   try {
@@ -75,7 +75,6 @@ function drop() {
 }
 canvas.addEventListener('pointerdown', event => {
   if (blocked() || gesture || !event.isPrimary || event.button !== 0) return;
-  if (!view.hitActive(event.clientX, event.clientY)) return;
   event.preventDefault(); canvas.focus({ preventScroll: true }); sound.unlock();
   view.beginDrag();
   gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, lastY: event.clientY, column: x, moved: false, lowered: false };
@@ -85,11 +84,14 @@ canvas.addEventListener('pointermove', event => {
   if (!gesture || gesture.id !== event.pointerId || blocked()) return;
   const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
   if (Math.hypot(dx, dy) > 12) gesture.moved = true;
+  gesture.axis ??= swipeAxis(dx, dy);
   if (gesture.moved) {
-    aim(gesture.column + Math.round(dx / view.cellPixels));
+    if (gesture.axis === 'horizontal') aim(gesture.column + Math.round(dx / view.cellPixels));
     const down = Math.max(0, event.clientY - gesture.lastY);
-    if (isDownSwipe(dx, dy)) gesture.lowered = true;
-    if (down > 0) view.lower(down / (view.cellPixels * 0.984));
+    if (gesture.axis === 'vertical') {
+      if (isDownSwipe(dx, dy)) gesture.lowered = true;
+      if (down > 0) view.lower(down / (view.cellPixels * 0.984));
+    }
   }
   gesture.lastY = event.clientY;
 });

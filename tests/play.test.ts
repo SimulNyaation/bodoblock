@@ -2,6 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { Pavement, WIDTH } from '../packages/play-core';
 import { receiptSVG } from '../apps/play/src/export';
 describe('minimal free placement', () => {
+  it('rotates at either wall with a one-cell sideways kick', () => {
+    const board = new Pavement();
+    expect(board.rotateAt(5, 0, 0)).toBe(4);
+    expect(board.rotateAt(0, 0, 0)).toBe(0);
+    expect(board.rotateAt(4, 0, 1)).toBe(4);
+    expect(board.rotateAt(5, 0, 2)).toBe(4);
+  });
+  it('does not rotate through occupied cells or lift a piece', () => {
+    const board = new Pavement(); board.drop(4, 1);
+    expect(board.rotateAt(5, 0, 0)).toBeUndefined();
+    expect(board.rotateAt(5, 2, 0)).toBe(4);
+    const other = new Pavement(); other.drop(0, 1);
+    expect(other.rotateAt(0, 0, 0)).toBe(1);
+  });
   it('slides a lowered vertical tile under an overhang instead of jumping onto its roof', () => {
     const board = new Pavement(); board.drop(0, 1); board.drop(0, 0);
     expect(board.landing(1, 1).y).toBe(3);

@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { followCamera } from './camera-motion';
+import { dropDuration, dropProgress, landingScale } from './drop-motion';
 import { contour, tileColor, size, WIDTH, type Pavement, type Rotation, type Tile } from '../../../packages/play-core';
 
 function geometry(w: number, h: number) {
@@ -6,7 +8,6 @@ function geometry(w: number, h: number) {
   shape.closePath();
   return new THREE.ExtrudeGeometry(shape, { depth: 0.17, bevelEnabled: true, bevelSize: 0.024, bevelThickness: 0.045, bevelSegments: 5, steps: 1 });
 }
-const ease = (t: number) => t * t * (3 - 2 * t);
 export class PlayScene {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -21,6 +22,7 @@ export class PlayScene {
   private light: THREE.DirectionalLight;
   private halfHeight = 8;
   private center = 7.4;
+  private cameraVelocity = 0;
   private x = 2;
   private rotation: Rotation = 0;
   private spin = 0;
@@ -32,7 +34,7 @@ export class PlayScene {
   private raf = 0;
   private last = 0;
   private animationTime = 0;
-  private dropping?: { from: THREE.Vector3; to: THREE.Vector3; elapsed: number; done: () => void };
+  private dropping?: { from: THREE.Vector3; to: THREE.Vector3; elapsed: number; duration: number; done: () => void };
   private reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private observer: ResizeObserver;
   constructor(private canvas: HTMLCanvasElement, private board: Pavement, private onAutoLand: () => void) {
@@ -65,6 +67,7 @@ export class PlayScene {
     this.halfHeight = 4 * h / w;
     this.camera.top = this.halfHeight; this.camera.bottom = -this.halfHeight; this.camera.updateProjectionMatrix();
     this.center = Math.max(this.halfHeight - 0.6, this.board.height + 0.6);
+    this.cameraVelocity = 0;
   }
   get busy() { return this.board.atLimit || !!this.dropping; }
   get cellPixels() { return this.canvas.clientWidth / 8; }
@@ -74,11 +77,6 @@ export class PlayScene {
     const edge = new THREE.Vector3(this.x + size(this.rotation).w / 2, this.activeY, 0.12).project(this.camera);
     // NDC -1 is the bottom and +1 is the top: 75% from bottom is +0.5.
     return edge.y < 0.5;
-  }
-  hitActive(clientX: number, clientY: number) {
-    const rect = this.canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
-    ray.setFromCamera(new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, 1 - (clientY - rect.top) / rect.height * 2), this.camera);
-    return ray.intersectObject(this.active).length > 0;
   }
   start() { this.started = true; }
   beginDrag() { this.start(); this.controlledY = this.activeY; this.held = true; this.contactTime = 0; }
@@ -90,8 +88,13 @@ export class PlayScene {
   aim(x: number, rotation: Rotation) {
     const previousX = this.x;
     const bottom = this.activeY;
-    if (!this.board.canPlace(this.x, bottom, rotation)) return false;
-    this.x = this.board.moveSide(this.x, bottom, x, rotation);
+    if (rotation !== this.rotation) {
+      const kickedX = this.board.rotateAt(this.x, bottom, rotation);
+      if (kickedX === undefined) return false;
+      this.x = kickedX;
+    } else {
+      this.x = this.board.moveSide(this.x, bottom, x, rotation);
+    }
     if (this.controlledY !== undefined) this.controlledY = bottom;
     this.spin += ((rotation - this.rotation + 4) % 4) * Math.PI / 2;
     if (this.x !== previousX || rotation !== this.rotation) this.contactTime = 0;
@@ -108,7 +111,10 @@ export class PlayScene {
   drop(done: () => void) {
     if (this.busy) return;
     const p = this.board.landingFrom(this.x, this.activeY, this.rotation);
-    this.dropping = { from: this.active.position.clone(), to: new THREE.Vector3(p.x + p.w / 2, p.y + p.h / 2, 0), elapsed: 0, done };
+    this.dropping = {
+      from: this.active.position.clone(), to: new THREE.Vector3(p.x + p.w / 2, p.y + p.h / 2, 0),
+      elapsed: 0, duration: dropDuration(this.activeY - p.y), done,
+    };
     this.ghost.visible = false;
   }
   add(tiles: Tile[]) {
@@ -118,6 +124,7 @@ export class PlayScene {
       mesh.rotation.z = tile.rotation * Math.PI / 2;
       mesh.castShadow = true; mesh.receiveShadow = true;
       mesh.userData.born = this.animationTime; mesh.userData.white = tile.white;
+      mesh.userData.baseY = tile.y; mesh.userData.height = tile.h;
       this.scene.add(mesh); this.settled.set(tile.id, mesh);
     }
   }
@@ -132,7 +139,11 @@ export class PlayScene {
     const dt = this.paused ? 0 : Math.min(0.05, Math.max(0, (now - this.last) / 1000)); this.last = now; this.animationTime += dt;
     const targetCenter = Math.max(this.halfHeight - 0.6, this.board.height + 0.6);
     const oldCenter = this.center;
-    if (!this.held && !this.dropping) this.center += (targetCenter - this.center) * (this.reduced ? 1 : 1 - Math.exp(-dt * 5.5));
+    if (dt > 0) {
+      const next = followCamera(this.center, this.cameraVelocity, targetCenter, dt);
+      this.center = this.reduced ? targetCenter : next.position;
+      this.cameraVelocity = this.reduced ? 0 : next.velocity;
+    }
     if (this.controlledY !== undefined) this.controlledY += this.center - oldCenter;
     if (!this.dropping && !this.held) this.board.advanceFloor(Math.max(0, Math.floor(this.center - this.halfHeight + 0.5)));
     this.camera.position.set(3, this.center - 4, 22); this.camera.up.set(0, 1, 0); this.camera.lookAt(3, this.center, 0);
@@ -141,7 +152,7 @@ export class PlayScene {
     this.active.visible = !this.board.atLimit;
     if (!this.board.atLimit && this.started && !this.held && !this.dropping && dt > 0) {
       const bottom = this.board.landingFrom(this.x, this.activeY, this.rotation).y;
-      this.controlledY = Math.max(bottom, this.activeY - dt * 1.4);
+      this.controlledY = Math.max(bottom, this.activeY - dt * 1.1);
       this.contactTime = this.controlledY <= bottom + 0.00001 ? this.contactTime + dt : 0;
       if (this.contactTime >= 0.45) { this.contactTime = 0; this.onAutoLand(); }
     }
@@ -149,8 +160,8 @@ export class PlayScene {
     this.ghost.position.set(p.x + p.w / 2, p.y + p.h / 2, 0.015); this.ghost.rotation.z = this.spin;
     if (this.dropping) {
       const drop = this.dropping; drop.elapsed += dt;
-      const t = Math.min(1, drop.elapsed / (this.reduced ? 0.01 : 0.26));
-      this.active.position.lerpVectors(drop.from, drop.to, ease(t));
+      const t = Math.min(1, drop.elapsed / (this.reduced ? 0.01 : drop.duration));
+      this.active.position.lerpVectors(drop.from, drop.to, dropProgress(t));
       if (t === 1) { this.dropping = undefined; drop.done(); }
     } else {
       const targetX = p.x + p.w / 2;
@@ -166,7 +177,14 @@ export class PlayScene {
       if (mesh.userData.white && age < 0.4 && !this.reduced) {
         const t = age / 0.4; mesh.scale.setScalar(Math.max(0.01, 1 + 2.7 * (t - 1) ** 3 + 1.7 * (t - 1) ** 2));
         mesh.position.z = Math.sin(t * Math.PI) * 0.16;
-      } else { mesh.scale.setScalar(1); mesh.position.z = 0; }
+      } else {
+        const squash = mesh.userData.white || this.reduced ? 1 : landingScale(age);
+        // Local X points vertically after a quarter turn; squeeze in board Y either way.
+        const vertical = mesh.userData.height === 2;
+        mesh.scale.set(vertical ? squash : 1, vertical ? 1 : squash, squash);
+        mesh.position.y = mesh.userData.baseY + mesh.userData.height * squash / 2;
+        mesh.position.z = 0;
+      }
     }
     this.renderer.render(this.scene, this.camera); this.raf = requestAnimationFrame(this.frame);
   };
