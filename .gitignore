@@ -1,0 +1,28 @@
+node_modules/
+dist/
+output/
+.playwright-cli/
+*.local
+
+# Local-only V1 archive. Keep the files on this PC; do not publish them.
+/legacy/
+/apps/mobile/
+/packages/game-core/
+/packages/activity-core/
+/tests/game.test.ts
+/scripts/browser-check.js
+/scripts/lan-check.js
+/scripts/sound-check.js
+/docs/prototype.md
+
+# Reference images are not runtime assets.
+/ex/
+
+# Local tooling and credentials
+.vercel/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,85 @@
+async (page) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('http://172.30.1.71:5173/');
+  const canvas = page.locator('#playfield');
+  await canvas.waitFor(); await page.waitForTimeout(250);
+  if (await page.getByRole('button').count() !== 1) throw new Error('Play must have only the pause button');
+  if ((await page.locator('body').innerText()).trim()) throw new Error('Play must not display explanations or stats');
+  const bounds = await canvas.boundingBox(), unit = bounds.width / 8;
+  const swipe = async (dx, dy) => {
+    const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height * 0.45;
+    await page.mouse.move(x, y); await page.mouse.down();
+    await page.mouse.move(x + dx, y + dy, { steps: 5 }); await page.mouse.up();
+  };
+  const tap = () => page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height * 0.4);
+  const drop = async () => { await swipe(0, 110); await page.waitForTimeout(500); };
+  const exportText = async () => {
+    await page.getByRole('button', { name: 'Export', exact: true }).click();
+    const text = await page.locator('#receipt-image').innerHTML();
+    await page.getByRole('button', { name: '영수증 닫기', exact: true }).click();
+    return { text };
+  };
+  let downloads = 0;
+  page.on('download', () => downloads++);
+  // Keyboard fixture; direct tile dragging is covered by drag-check.js.
+  await canvas.focus();
+  await canvas.press('ArrowLeft'); await canvas.press('ArrowDown'); await page.waitForTimeout(340);
+  await canvas.press('ArrowUp'); await canvas.press('ArrowLeft'); await canvas.press('ArrowLeft'); await canvas.press('ArrowDown'); await page.waitForTimeout(340);
+  await canvas.press('ArrowUp'); await canvas.press('ArrowDown'); await page.waitForTimeout(340);
+  await canvas.press('ArrowLeft'); await canvas.press('ArrowLeft'); await canvas.press('ArrowDown'); await page.waitForTimeout(340);
+  await page.screenshot({ path: 'output/playwright/minimal-ring.png' });
+  await page.getByRole('button', { name: '일시정지', exact: true }).click();
+  const buttons = await page.getByRole('button').allTextContents();
+  if (buttons.join(',') !== 'Resume,Export') throw new Error('Pause must contain exactly Resume and Export');
+  const colors = await page.locator('#pause-actions button').evaluateAll(buttons => buttons.map(button => {
+    const style = getComputedStyle(button); return `${style.backgroundColor}/${style.color}`;
+  }));
+  if (colors[0] !== colors[1]) throw new Error('Pause buttons must share colors');
+  const ring = await exportText();
+  if (!ring.text.includes('4 pieces + 1 little centers')) throw new Error('Gesture ring did not fill its center');
+  await page.screenshot({ path: 'output/playwright/minimal-paused.png' });
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  for (let i = 0; i < 18; i++) { await canvas.press('ArrowDown'); await page.waitForTimeout(340); }
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: 'output/playwright/minimal-scroll.png' });
+  await page.getByRole('button', { name: '일시정지', exact: true }).click();
+  const tall = await exportText();
+  if (!tall.text.includes('22 pieces + 1 little centers')) throw new Error('Infinite stacking lost placements');
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await page.waitForTimeout(600);
+  await page.getByRole('button', { name: '일시정지', exact: true }).click();
+  const stationary = await exportText();
+  if (!stationary.text.includes('22 pieces + 1 little centers')) throw new Error('Unrequested gravity placement');
+  if (downloads !== 0) throw new Error('Export preview must not download automatically');
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const scrollable = await page.locator('#receipt-scroll').evaluate(el => el.scrollHeight > el.clientHeight);
+  if (!scrollable) throw new Error('Long receipt must scroll');
+  await page.locator('#receipt-scroll').evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await page.screenshot({ path: 'output/playwright/receipt-preview-v2.png' });
+  const nextDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: '이미지 저장', exact: true }).click();
+  const saved = await nextDownload;
+  await saved.saveAs('output/playwright/minimal-receipt.svg');
+  const savedText = await page.evaluate(async url => (await fetch(url)).text(), saved.url());
+  if (!savedText.includes('22 pieces + 1 little centers')) throw new Error('Save must export pre-reset session');
+  if (await page.locator('#pause-menu').evaluate(el => el.open)) throw new Error('Save should return to a new game');
+  await page.getByRole('button', { name: '일시정지', exact: true }).click();
+  const reset = await exportText();
+  if (!reset.text.includes('0 pieces + 0 little centers')) throw new Error('Save must reset session');
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await canvas.press('ArrowDown'); await page.waitForTimeout(340);
+  await page.getByRole('button', { name: '일시정지', exact: true }).click();
+  if (!(await exportText()).text.includes('1 pieces + 0 little centers')) throw new Error('New game must be playable');
+  await page.reload();
+  await page.getByRole('button', { name: '일시정지', exact: true }).click();
+  const fresh = await exportText();
+  if (!fresh.text.includes('0 pieces + 0 little centers')) throw new Error('Reload must reset the board');
+  await page.goto('http://172.30.1.71:5173/legacy/');
+  await page.getByRole('button', { name: /소리 고르기/ }).waitFor();
+  if (await page.locator('#distance').count() !== 1) throw new Error('Legacy must preserve meters');
+  await page.goto('http://172.30.1.71:5173/');
+  if (errors.length) throw new Error(errors.join(', '));
+  return { passed: true, gestureRing: true, placements: 22, export: true, reloadReset: true, legacy: true, runtimeErrors: errors };
+}
